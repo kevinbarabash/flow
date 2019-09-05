@@ -1924,8 +1924,8 @@ incompatible with `Element` [2].
               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 References:
-   <BUILTINS>/dom.js:806:52
-   806|   getElementById(elementId: string): HTMLElement | null;
+   <BUILTINS>/dom.js:812:52
+   812|   getElementById(elementId: string): HTMLElement | null;
                                                            ^^^^ [1]
    <BUILTINS>/react-dom.js:30:16
     30|     container: Element,
@@ -2943,8 +2943,8 @@ with `Element` [2].
                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 References:
-   <BUILTINS>/dom.js:1045:50
-   1045|   querySelector(selector: string): HTMLElement | null;
+   <BUILTINS>/dom.js:1051:50
+   1051|   querySelector(selector: string): HTMLElement | null;
                                                           ^^^^ [1]
    <BUILTINS>/react-dom.js:18:16
      18|     container: Element,
@@ -2961,8 +2961,8 @@ with `Element` [2].
                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 References:
-   <BUILTINS>/dom.js:1045:50
-   1045|   querySelector(selector: string): HTMLElement | null;
+   <BUILTINS>/dom.js:1051:50
+   1051|   querySelector(selector: string): HTMLElement | null;
                                                           ^^^^ [1]
    <BUILTINS>/react-dom.js:18:16
      18|     container: Element,
@@ -2979,8 +2979,8 @@ with `Element` [2].
                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 References:
-   <BUILTINS>/dom.js:1045:50
-   1045|   querySelector(selector: string): HTMLElement | null;
+   <BUILTINS>/dom.js:1051:50
+   1051|   querySelector(selector: string): HTMLElement | null;
                                                           ^^^^ [1]
    <BUILTINS>/react-dom.js:18:16
      18|     container: Element,
@@ -3011,8 +3011,8 @@ with `Element` [2].
                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 References:
-   <BUILTINS>/dom.js:1045:50
-   1045|   querySelector(selector: string): HTMLElement | null;
+   <BUILTINS>/dom.js:1051:50
+   1051|   querySelector(selector: string): HTMLElement | null;
                                                           ^^^^ [1]
    <BUILTINS>/react-dom.js:18:16
      18|     container: Element,
@@ -3044,8 +3044,8 @@ with `Element` [2].
                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 References:
-   <BUILTINS>/dom.js:1045:50
-   1045|   querySelector(selector: string): HTMLElement | null;
+   <BUILTINS>/dom.js:1051:50
+   1051|   querySelector(selector: string): HTMLElement | null;
                                                           ^^^^ [1]
    <BUILTINS>/react-dom.js:18:16
      18|     container: Element,
@@ -3077,8 +3077,8 @@ with `Element` [2].
                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 References:
-   <BUILTINS>/dom.js:1045:50
-   1045|   querySelector(selector: string): HTMLElement | null;
+   <BUILTINS>/dom.js:1051:50
+   1051|   querySelector(selector: string): HTMLElement | null;
                                                           ^^^^ [1]
    <BUILTINS>/react-dom.js:18:16
      18|     container: Element,
@@ -3136,16 +3136,16 @@ Error --------------------------------------------------------------------------
 Cannot create `MyComponent` element because undefined [1] is incompatible with string [2] in property `title`.
 
    undefined_prop.js:7:1
-    7| <MyComponent title={undefined} />;
-       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   7| <MyComponent title={undefined} />;
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 References:
-   <BUILTINS>/core.js:13:24
-   13| declare var undefined: void;
-                              ^^^^ [1]
+   undefined_prop.js:7:21
+   7| <MyComponent title={undefined} />;
+                          ^^^^^^^^^ [1]
    undefined_prop.js:5:51
-    5| class MyComponent extends React.Component<{title: string}> {}
-                                                         ^^^^^^ [2]
+   5| class MyComponent extends React.Component<{title: string}> {}
+                                                        ^^^^^^ [2]
 
 
 Error ------------------------------------------------------------------------------------------ useCallback_hook.js:6:3
@@ -3513,20 +3513,20 @@ References:
 
 Error -------------------------------------------------------------------------------- useImperativeHandle_hook.js:34:40
 
-Cannot call `React.useImperativeHandle` with function bound to `create` because inexact `Interface` [1] is incompatible
-with exact object literal [2] in the return value.
+Cannot call `React.useImperativeHandle` with function bound to `create` because inexact object literal [1] is
+incompatible with exact `Interface` [2] in the return value.
 
    useImperativeHandle_hook.js:34:40
    34|   React.useImperativeHandle(refSetter, () => ({})); // Error: inexact object literal is incompatible with exact Interface
                                               ^^^^^^^^^^
 
 References:
-   useImperativeHandle_hook.js:33:39
-   33|   const refSetter = (instance: null | Interface) => {};
-                                             ^^^^^^^^^ [1]
    useImperativeHandle_hook.js:34:47
    34|   React.useImperativeHandle(refSetter, () => ({})); // Error: inexact object literal is incompatible with exact Interface
-                                                     ^^ [2]
+                                                     ^^ [1]
+   useImperativeHandle_hook.js:33:39
+   33|   const refSetter = (instance: null | Interface) => {};
+                                             ^^^^^^^^^ [2]
 
 
 Error -------------------------------------------------------------------------------------- useLayoutEffect_hook.js:6:3

@@ -15,6 +15,7 @@ type ('success, 'success_module) generic_t =
   | FailureNullishType
   | FailureAnyType
   | FailureUnhandledType of Type.t
+  | FailureUnhandledMembers of Type.t
 
 type t = (
   (* Success *) (ALoc.t option * Type.t) SMap.t,
@@ -219,26 +220,43 @@ let rec merge_type cx =
   | (t1, t2) ->
       create_union (UnionRep.make t1 t2 [])
 
-let instantiate_poly_t cx t = function
-  | None -> (* nothing to do *) t
-  | Some types -> match t with
-      | DefT (_, _, PolyT (_, type_params, t_, _)) -> (
-        try
-          let subst_map = List.fold_left2 (fun acc {name; _} type_ ->
-            SMap.add name type_ acc
-          ) SMap.empty (Nel.to_list type_params) types in
-          subst cx subst_map t_
-        with _ ->
-          prerr_endline "Instantiating poly type failed";
-          t
-      )
-      | DefT (_, _, EmptyT _)
-      | DefT (_, _, MixedT _)
-      | AnyT _
-      | DefT (_, _, (TypeT (_, AnyT _))) ->
-          t
-      | _ ->
-        assert_false ("unexpected args passed to instantiate_poly_t: " ^ (string_of_ctor t))
+let instantiate_poly_t cx t args =
+  match t with
+  | DefT (_, _, PolyT (_, type_params, t_, _)) ->
+    let args = Option.value ~default:[] args in
+    let maximum_arity = Nel.length type_params in
+    if List.length args > maximum_arity then begin
+      Hh_logger.error "Instantiating poly type failed";
+      t
+    end else
+      let map, _, too_few_args = Nel.fold_left
+        (fun (map, ts, too_few_args) typeparam ->
+          let t, ts, too_few_args = match typeparam, ts with
+          | {default=Some default; _;}, [] ->
+              (* fewer arguments than params and we have a default *)
+              subst cx map default, [], too_few_args
+          | {default=None; _;}, [] ->
+              AnyT.error (reason_of_t t), [], true
+          | _, t::ts ->
+              t, ts, too_few_args in
+          SMap.add typeparam.name t map, ts, too_few_args
+        )
+        (SMap.empty, args, false)
+        type_params in
+      if too_few_args then begin
+        Hh_logger.error "Instantiating poly type failed";
+        t
+      end else subst cx map t_
+  | DefT (_, _, EmptyT _)
+  | DefT (_, _, MixedT _)
+  | AnyT _
+  | DefT (_, _, (TypeT (_, AnyT _))) ->
+      t
+  | _ ->
+    match args with
+    | None -> t
+    | Some _ ->
+      assert_false ("unexpected args passed to instantiate_poly_t: " ^ (string_of_ctor t))
 
 let intersect_members cx members =
   match members with
@@ -274,6 +292,7 @@ let string_of_extracted_type = function
   | FailureNullishType -> "FailureNullishType"
   | FailureAnyType -> "FailureAnyType"
   | FailureUnhandledType t -> Printf.sprintf "FailureUnhandledType (%s)" (Type.string_of_ctor t)
+  | FailureUnhandledMembers t -> Printf.sprintf "FailureUnhandledMembers (%s)" (Type.string_of_ctor t)
 
 let to_command_result = function
   | Success map
@@ -288,6 +307,10 @@ let to_command_result = function
   | FailureUnhandledType t ->
       Error (spf
         "autocomplete on unexpected type of value %s (please file a task!)"
+        (string_of_ctor t))
+  | FailureUnhandledMembers t ->
+      Error (spf
+        "autocomplete on unexpected members of value %s (please file a task!)"
         (string_of_ctor t))
 
 let find_props cx =
@@ -325,24 +348,13 @@ let rec resolve_type cx = function
       end
   | t -> t
 
-let resolve_builtin_class cx ?trace = function
-  | DefT (reason, _, BoolT _) ->
-    get_builtin_type cx ?trace reason "Boolean" |> resolve_type cx
-  | DefT (reason, _, NumT _) ->
-    get_builtin_type cx ?trace reason "Number"  |> resolve_type cx
-  | DefT (reason, _, StrT _) ->
-    get_builtin_type cx ?trace reason "String"  |> resolve_type cx
-  | DefT (reason, _, ArrT arrtype) ->
-    let builtin, elemt = match arrtype with
-    | ArrayAT (elemt, _) -> get_builtin cx ?trace "Array" reason, elemt
-    | TupleAT (elemt, _)
-    | ROArrayAT (elemt) -> get_builtin cx ?trace "$ReadOnlyArray" reason, elemt
-    in
-    let array_t = resolve_type cx builtin in
-    Some [elemt] |> instantiate_poly_t cx array_t |> instantiate_type
-  | t -> t
-
 let rec extract_type cx this_t = match this_t with
+  | OpenT _
+  | AnnotT _
+  | MergedT _ ->
+      resolve_type cx this_t |> extract_type cx
+
+  | OptionalT (_, ty)
   | MaybeT (_, ty) ->
       extract_type cx ty
   | DefT (_, _, (NullT | VoidT))
@@ -350,15 +362,11 @@ let rec extract_type cx this_t = match this_t with
       FailureNullishType
   | AnyT _ ->
       FailureAnyType
-  | AnnotT (_, source_t, _) ->
-    let source_t = resolve_type cx source_t in
-    extract_type cx source_t
   | DefT (_, _, InstanceT _ ) as t ->
       Success t
   | DefT (_, _, ObjT _) as t ->
       Success t
   | ExactT (_, t) ->
-      let t = resolve_type cx t in
       extract_type cx t
   | ModuleT _ as t ->
       SuccessModule t
@@ -377,8 +385,7 @@ let rec extract_type cx this_t = match this_t with
       extract_type cx sub_type
   | ThisClassT (_, DefT (_, _, InstanceT (static, _, _, _)))
   | DefT (_, _, ClassT (DefT (_, _, InstanceT (static, _, _, _)))) ->
-      let static_t = resolve_type cx static in
-      extract_type cx static_t
+      extract_type cx static
   | DefT (_, _, FunT _) as t ->
       Success t
   | IntersectionT _ as t ->
@@ -399,7 +406,6 @@ let rec extract_type cx this_t = match this_t with
       get_builtin_type cx reason "String"  |> extract_type cx
 
   | DefT (_, _, IdxWrapper t) ->
-      let t = resolve_type cx t in
       extract_type cx t
 
   | DefT (_, _, ReactAbstractComponentT _) as t ->
@@ -411,12 +417,25 @@ let rec extract_type cx this_t = match this_t with
 
   | OpaqueT (_, {underlying_t = Some t; _})
   | OpaqueT (_, {super_t = Some t; _})
-    -> extract_type cx t
+    ->
+      extract_type cx t
+
+
+  | DefT (reason, _, ArrT arrtype) ->
+    let builtin, elemt = match arrtype with
+    | ArrayAT (elemt, _) -> get_builtin cx "Array" reason, elemt
+    | TupleAT (elemt, _)
+    | ROArrayAT (elemt) -> get_builtin cx "$ReadOnlyArray" reason, elemt
+    in
+    let array_t = resolve_type cx builtin in
+    Some [elemt] |> instantiate_poly_t cx array_t |> instantiate_type |> extract_type cx
+
+  | EvalT (t, defer, id) ->
+    eval_evalt cx t defer id |>
+    extract_type cx
 
   | AnyWithLowerBoundT _
   | AnyWithUpperBoundT _
-  | MergedT _
-  | DefT (_, _, ArrT _)
   | BoundT _
   | InternalT (ChoiceKitT (_, _))
   | TypeDestructorTriggerT _
@@ -424,7 +443,6 @@ let rec extract_type cx this_t = match this_t with
   | CustomFunT (_, _)
   | MatchingPropT (_, _, _)
   | DefT (_, _, EmptyT _)
-  | EvalT (_, _, _)
   | ExistsT _
   | InternalT (ExtendsT _)
   | FunProtoApplyT _
@@ -437,8 +455,6 @@ let rec extract_type cx this_t = match this_t with
   | ObjProtoT _
   | OpaqueT _
   | OpenPredT (_, _, _, _)
-  | OpenT _
-  | OptionalT _
   | ShapeT _
   | ThisClassT _
   | DefT (_, _, TypeT _)
@@ -449,6 +465,7 @@ let rec extract_members ?(exclude_proto_members=false) cx = function
   | FailureNullishType -> FailureNullishType
   | FailureAnyType -> FailureAnyType
   | FailureUnhandledType t -> FailureUnhandledType t
+  | FailureUnhandledMembers t -> FailureUnhandledMembers t
   | Success (DefT (_, _, InstanceT (_, super, _, {own_props; proto_props; _}))) ->
       let members = SMap.fold (fun x p acc ->
         (* TODO: It isn't currently possible to return two types for a given
@@ -476,8 +493,7 @@ let rec extract_members ?(exclude_proto_members=false) cx = function
             | None -> acc
           ) (find_props cx proto_props) members
         in
-        let super_t = resolve_type cx super in
-        let super_flds = extract_members_as_map ~exclude_proto_members cx super_t in
+        let super_flds = extract_members_as_map ~exclude_proto_members cx super in
         Success (AugmentableSMap.augment super_flds ~with_bindings:members)
   | Success (DefT (_, _, ObjT {props_tmap = flds; proto_t = proto; _})) ->
       let proto_reason = reason_of_t proto in
@@ -486,7 +502,7 @@ let rec extract_members ?(exclude_proto_members=false) cx = function
         (get_builtin_type cx proto_reason "Object")
         []
       in
-      let proto_t = resolve_type cx (IntersectionT (proto_reason, rep)) in
+      let proto_t = IntersectionT (proto_reason, rep) in
       let prot_members =
         if exclude_proto_members then SMap.empty
         else extract_members_as_map ~exclude_proto_members cx proto_t
@@ -508,16 +524,13 @@ let rec extract_members ?(exclude_proto_members=false) cx = function
       in
       SuccessModule (named_exports, cjs_export)
   | Success (DefT (_, _, FunT (static, proto, _))) ->
-      let static_t = resolve_type cx static in
-      let proto_t = resolve_type cx proto in
-      let members = extract_members_as_map ~exclude_proto_members cx static_t in
-      let prot_members = extract_members_as_map ~exclude_proto_members cx proto_t in
+      let members = extract_members_as_map ~exclude_proto_members cx static in
+      let prot_members = extract_members_as_map ~exclude_proto_members cx proto in
       Success (AugmentableSMap.augment prot_members ~with_bindings:members)
   | Success (IntersectionT (_, rep)) ->
       (* Intersection type should autocomplete for every property of
          every type in the intersection *)
       let ts = InterRep.members rep in
-      let ts = Core_list.map ~f:(resolve_type cx) ts in
       let members = Core_list.map ~f:(extract_members_as_map ~exclude_proto_members cx) ts in
       Success (List.fold_left (fun acc members ->
         AugmentableSMap.augment acc ~with_bindings:members
@@ -525,7 +538,7 @@ let rec extract_members ?(exclude_proto_members=false) cx = function
   | Success (UnionT (_, rep)) ->
       (* Union type should autocomplete for only the properties that are in
       * every type in the intersection *)
-      let ts = Core_list.map ~f:(resolve_type cx) (UnionRep.members rep) in
+      let ts = UnionRep.members rep in
       let members = ts
         (* Although we'll ignore the any-ish and nullish members of the union *)
         |> List.filter (function
@@ -536,7 +549,7 @@ let rec extract_members ?(exclude_proto_members=false) cx = function
         |> intersect_members cx in
       Success members
   | Success t | SuccessModule t ->
-      FailureUnhandledType t
+      FailureUnhandledMembers t
 
 and extract ?exclude_proto_members cx = extract_type cx %> extract_members ?exclude_proto_members cx
 

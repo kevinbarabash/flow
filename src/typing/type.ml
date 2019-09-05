@@ -1410,12 +1410,12 @@ end = struct
      see the object twice between the merge and check phases, we still hit
      the object to object fast path when checking *)
   type id =
-    | Source of int
+    | Source of ALoc.t
     | Generated of int
 
   let compare_id id1 id2 =
     match id1, id2 with
-    | Source i1, Source i2 -> i1 - i2
+    | Source loc1, Source loc2 -> ALoc.quick_compare loc1 loc2
     | Generated i1, Generated i2 -> i1 - i2
     | Source _, Generated _ -> -1
     | Generated _, Source _ -> 1
@@ -1459,13 +1459,13 @@ end = struct
 
   let generate_id = Reason.mk_id %> id_of_int
 
-  let id_of_aloc loc = Source (ALoc.hash loc)
+  let id_of_aloc loc = Source loc
 
   let fake_id = Generated 0
 
   let string_of_id = function
   | Generated id -> string_of_int id
-  | Source id -> string_of_int id
+  | Source id -> string_of_aloc id
 
   let extract_named_exports pmap =
     SMap.fold (fun x p tmap ->
@@ -1657,9 +1657,9 @@ end = struct
 
   let specialized_reason r (_, _, _, specialization) =
     match !specialization with
-    | Some Empty -> replace_reason_const REmpty r
+    | Some Empty -> replace_desc_reason REmpty r
     | Some (Singleton t) -> TypeUtil.reason_of_t t
-    | Some (UnionEnum _) -> replace_reason_const RUnionEnum r
+    | Some (UnionEnum _) -> replace_desc_reason RUnionEnum r
     | _ -> r
 
   (********** Optimizations **********)
@@ -2863,7 +2863,7 @@ end
 module Primitive (P: PrimitiveType) = struct
   let desc = P.desc
   let at tok = P.make (annot_reason (mk_reason desc tok))
-  let why reason = P.make (replace_reason_const ~keep_def_loc:true desc reason)
+  let why reason = P.make (replace_desc_reason desc reason)
   let make = P.make
 end
 
@@ -2896,7 +2896,7 @@ module AnyT = struct
   let desc = function Annotated -> RAnyExplicit | _ -> RAnyImplicit
   let make source r = AnyT (r, source)
   let at   source   = mk_reason (desc source) %> annot_reason %> make source
-  let why  source   = replace_reason_const ~keep_def_loc:true (desc source) %> make source
+  let why  source   = replace_desc_reason (desc source) %> make source
   let annot      = why Annotated
   let error      = why AnyError
   let untyped    = why Untyped
@@ -3440,38 +3440,46 @@ and elemt_of_arrtype = function
 | ROArrayAT (elemt)
 | TupleAT (elemt, _) -> elemt
 
-let optional t =
-  let reason = replace_reason (fun desc -> ROptional desc) (reason_of_t t) in
+let optional ?annot_loc t =
+  let reason = update_desc_new_reason (fun desc -> ROptional desc) (reason_of_t t) in
+  let reason = match annot_loc with
+  | Some loc -> repos_reason loc ~annot_loc:loc reason
+  | None -> reason
+  in
   OptionalT (reason, t)
 
 let maybe t =
-  let reason = replace_reason (fun desc -> RMaybe desc) (reason_of_t t) in
+  let reason = update_desc_new_reason (fun desc -> RMaybe desc) (reason_of_t t) in
   MaybeT (reason, t)
 
 let exact t =
   ExactT (reason_of_t t, t)
 
-let class_type ?(structural=false) t =
+let class_type ?(structural=false) ?annot_loc t =
   let reason =
     if structural then reason_of_t t
-    else replace_reason (fun desc -> RClass desc) (reason_of_t t)
+    else update_desc_new_reason (fun desc -> RClass desc) (reason_of_t t)
+  in
+  let reason = match annot_loc with
+  | Some loc -> repos_reason loc ~annot_loc:loc reason
+  | None -> reason
   in
   DefT (reason, bogus_trust (), ClassT t)
 
 let this_class_type t =
-  let reason = replace_reason (fun desc -> RClass desc) (reason_of_t t) in
+  let reason = update_desc_new_reason (fun desc -> RClass desc) (reason_of_t t) in
   ThisClassT (reason, t)
 
 let extends_type r l u =
-  let reason = replace_reason (fun desc -> RExtends desc) r in
+  let reason = update_desc_reason (fun desc -> RExtends desc) r in
   InternalT (ExtendsT (reason, l, u))
 
 let extends_use_type use_op l u =
-  let reason = replace_reason (fun desc -> RExtends desc) (reason_of_t u) in
+  let reason = update_desc_new_reason (fun desc -> RExtends desc) (reason_of_t u) in
   ExtendsUseT (use_op, reason, [], l, u)
 
 let poly_type id tparams_loc (tparams: typeparam Nel.t) t =
-  let reason = replace_reason (fun desc -> RPolyType desc) (reason_of_t t) in
+  let reason = update_desc_new_reason (fun desc -> RPolyType desc) (reason_of_t t) in
   DefT (reason, bogus_trust (), PolyT (tparams_loc, tparams, t, id))
 
 let poly_type_of_tparam_list id tparams_loc tparams t =
@@ -3490,10 +3498,10 @@ let poly_type_of_tparams id (tparams: typeparams) t =
  * source level type application, but merely a tool for some other functionality,
  * e.g. canonicalize_imported_type in flow_js.ml. *)
 let typeapp ?(implicit=false) ?annot_loc t targs =
-  let reason = replace_reason (fun desc ->
+  let reason = update_desc_new_reason (fun desc ->
     if implicit then RTypeAppImplicit desc else RTypeApp desc) (reason_of_t t) in
   let reason = match annot_loc with
-  | Some loc -> annot_reason (repos_reason loc reason)
+  | Some loc -> repos_reason loc ~annot_loc:loc reason
   | None -> reason
   in
   let use_op = Op (TypeApplication { type' = reason }) in
@@ -3501,11 +3509,11 @@ let typeapp ?(implicit=false) ?annot_loc t targs =
 
 let this_typeapp ?annot_loc t this targs =
   let reason = match targs with
-  | Some _ -> replace_reason (fun desc -> RTypeApp desc) (reason_of_t t)
+  | Some _ -> update_desc_new_reason (fun desc -> RTypeApp desc) (reason_of_t t)
   | None -> reason_of_t t
   in
   let reason = match annot_loc with
-  | Some loc -> annot_reason (repos_reason loc reason)
+  | Some loc -> repos_reason loc ~annot_loc:loc reason
   | None -> reason
   in
   ThisTypeAppT (reason, t, this, targs)
@@ -3525,7 +3533,7 @@ let unknown_use = Op UnknownUse
    want to encourage this pattern, but we also don't want to block uses of this
    pattern. Thus, we compromise by not tracking the property types. *)
 let dummy_static =
-  replace_reason (fun desc -> RStatics desc) %> Unsoundness.dummy_static_any
+  update_desc_reason (fun desc -> RStatics desc) %> Unsoundness.dummy_static_any
 
 let dummy_prototype =
   ObjProtoT (locationless_reason RDummyPrototype)
@@ -3537,7 +3545,7 @@ let dummy_this =
   locationless_reason RDummyThis |> MixedT.make |> with_trust bogus_trust
 
 let global_this reason =
-  let reason = replace_reason_const (RCustom "global object") reason in
+  let reason = replace_desc_reason (RCustom "global object") reason in
   ObjProtoT reason
 
 let default_obj_assign_kind =
@@ -3613,7 +3621,7 @@ let mk_objecttype ?(flags=default_flags) ~dict ~call pmap proto = {
 }
 
 let mk_object_def_type ~reason ?(flags=default_flags) ~dict ~call pmap proto =
-  let reason = replace_reason invalidate_rtype_alias reason in
+  let reason = update_desc_reason invalidate_rtype_alias reason in
   DefT (reason, bogus_trust (), ObjT (mk_objecttype ~flags ~dict ~call pmap proto))
 
 let apply_opt_funcalltype (this, targs, args, clos, strict) t_out = {

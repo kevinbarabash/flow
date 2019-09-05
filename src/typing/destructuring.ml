@@ -212,7 +212,7 @@ let identifier cx ~f acc loc name =
   | None ->
     Type_inference_hooks_js.dispatch_lval_hook cx name loc Type_inference_hooks_js.Id
   in
-  let current = mod_reason_of_t (replace_reason (function
+  let current = mod_reason_of_t (update_desc_reason (function
     | RDefaultValue
     | RArrayPatternRestProp
     | RObjectPatternRestProp

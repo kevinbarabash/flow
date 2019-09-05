@@ -89,7 +89,7 @@ let empty id reason tparams tparams_map super =
   } in
   let constructor = [] in
   let static =
-    let reason = replace_reason (fun desc -> RStatics desc) reason in
+    let reason = update_desc_reason (fun desc -> RStatics desc) reason in
     empty_sig reason
   in
   let instance = empty_sig reason in
@@ -153,7 +153,7 @@ let add_indexer ~static polarity ~key ~value x =
     |> add_field' ~static "$value" (None, polarity, Annot value)
 
 let add_name_field x =
-  let r = replace_reason (fun desc -> RNameProperty desc) x.instance.reason in
+  let r = update_desc_reason (fun desc -> RNameProperty desc) x.instance.reason in
   let t = Type.StrT.why r |> Type.with_trust Trust.bogus_trust in
   add_field' ~static:true "name" (None, Polarity.Neutral, Annot t) x
 
@@ -391,7 +391,7 @@ let specialize cx targs c =
     Flow.flow cx (c, SpecializeT (unknown_use, reason, reason, None, targs, tvar))
   )
 
-let statictype cx tparams_with_this x =
+let statictype cx static_proto x =
   let s = x.static in
   let inited_fields, fields, methods, call = elements cx s in
   let props = SMap.union fields methods
@@ -399,19 +399,6 @@ let statictype cx tparams_with_this x =
       Utils_js.assert_false (Utils_js.spf
         "static fields and methods must be disjoint: %s"
         (Debug_js.dump_reason cx s.reason)))
-  in
-  let static_proto = match x.super with
-  | Interface _ -> Type.NullProtoT s.reason (* interfaces don't have statics *)
-  | Class { extends; _ } ->
-    match extends with
-    (* class B extends A {}; B.__proto__ === A *)
-    | Explicit (annot_loc, c, targs) ->
-      let this = SMap.find_unsafe "this" tparams_with_this in
-      (* Eagerly specialize when there are no targs *)
-      let c = if targs = None then specialize cx targs c else c in
-      Type.(class_type (this_typeapp ~annot_loc c this targs))
-    (* class A {}; A.__proto__ === Function.prototype *)
-    | Implicit _ -> Type.FunProtoT s.reason
   in
   (* Statics are not exact, because we allow width subtyping between them.
      Specifically, given class A and class B extends A, Class<B> <: Class<A>. *)
@@ -468,7 +455,7 @@ let add_this self cx reason tparams tparams_map =
       ) (Type.TypeParams.to_list tparams) in
       Type.typeapp self targs
   in
-  let this_reason = replace_reason_const RThisType reason in
+  let this_reason = replace_desc_reason RThisType reason in
   let this_tp = { Type.
     name = "this";
     reason = this_reason;
@@ -514,13 +501,14 @@ let remove_this x =
     }
 
 let supertype cx tparams_with_this x =
-  let super_reason = replace_reason (fun d -> RSuperOf d) x.instance.reason in
+  let super_reason = update_desc_reason (fun d -> RSuperOf d) x.instance.reason in
+  let static_reason = x.static.reason in
   let open Type in
   match x.super with
   | Interface {inline = _; extends; callable} ->
     let extends = Core_list.map ~f:(function
     | loc, c, None ->
-      let reason = annot_reason (repos_reason loc (reason_of_t c)) in
+      let reason = repos_reason loc ~annot_loc:loc (reason_of_t c) in
       Flow.mk_instance cx reason c
     | annot_loc, c, Some targs -> typeapp ~annot_loc c targs
     ) extends in
@@ -535,29 +523,44 @@ let supertype cx tparams_with_this x =
        intersection of super types. TODO: Instead of using an intersection for
        this, we should resolve the extends and build a flattened type, and just
        use FunProtoT/ObjProtoT as the prototype *)
-    (match extends with
+    let super = match extends with
     | [] -> ObjProtoT super_reason
     | [t] -> t
-    | t0::t1::ts -> IntersectionT (super_reason, InterRep.make t0 t1 ts))
+    | t0::t1::ts -> IntersectionT (super_reason, InterRep.make t0 t1 ts)
+    in
+    (* interfaces don't have statics *)
+    let static_proto = Type.NullProtoT static_reason  in
+    super, static_proto
   | Class {extends; mixins; _} ->
     let this = SMap.find_unsafe "this" tparams_with_this in
-    let t = match extends with
+    let extends_t, static_proto = match extends with
     | Explicit (annot_loc, c, targs) ->
       (* Eagerly specialize when there are no targs *)
       let c = if targs = None then specialize cx targs c else c in
-      this_typeapp ~annot_loc c this targs
+      let t = this_typeapp ~annot_loc c this targs in
+      (* class B extends A {}; B.__proto__ === A *)
+      let static_proto = class_type ~annot_loc t in
+      t, static_proto
     | Implicit {null} ->
-      if null then NullProtoT super_reason else ObjProtoT super_reason
+      let t =
+        if null then NullProtoT super_reason
+        else ObjProtoT super_reason
+      in
+      (* class A {}; A.__proto__ === Function.prototype *)
+      let static_proto = FunProtoT static_reason in
+      t, static_proto
     in
     let mixins_rev = List.rev_map (fun (annot_loc, c, targs) ->
       (* Eagerly specialize when there are no targs *)
       let c = if targs = None then specialize cx targs c else c in
       this_typeapp ~annot_loc c this targs
     ) mixins in
-    match List.rev_append mixins_rev [t] with
+    let super = match List.rev_append mixins_rev [extends_t] with
     | [] -> failwith "impossible"
     | [t] -> t
     | t0::t1::ts -> IntersectionT (super_reason, InterRep.make t0 t1 ts)
+    in
+    super, static_proto
 
 let thistype cx x =
   let tparams_with_this = x.tparams_map in
@@ -567,18 +570,18 @@ let thistype cx x =
     instance = {reason; _};
     _;
   } = x in
-  let super = supertype cx tparams_with_this x in
+  let super, static_proto = supertype cx tparams_with_this x in
   let implements = match x.super with
   | Interface _ -> []
   | Class {implements; _} ->
     Core_list.map ~f:(function
       | loc, c, None ->
-        let reason = annot_reason (repos_reason loc (Type.reason_of_t c)) in
+        let reason = repos_reason loc ~annot_loc:loc (Type.reason_of_t c) in
         Flow.mk_instance cx reason c
       | annot_loc, c, Some targs -> Type.typeapp ~annot_loc c targs
     ) implements
   in
-  let initialized_static_fields, static_objtype = statictype cx tparams_with_this x in
+  let initialized_static_fields, static_objtype = statictype cx static_proto x in
   let insttype = insttype cx ~initialized_static_fields x in
   let open Type in
   let static = DefT (sreason, bogus_trust (), ObjT static_objtype) in
@@ -594,7 +597,7 @@ let check_implements cx def_reason x =
     List.iter (fun (loc, c, targs_opt) ->
       let i = match targs_opt with
       | None ->
-        let reason = annot_reason (repos_reason loc (reason_of_t c)) in
+        let reason = repos_reason loc ~annot_loc:loc (reason_of_t c) in
         Flow.mk_instance cx reason c
       | Some targs -> typeapp ~annot_loc:loc c targs
       in
@@ -634,7 +637,7 @@ let check_super cx def_reason x =
       Flow.flow_p cx ~use_op reason reason propref (p1, p2)
   ) own;
 
-  let super = supertype cx tparams_with_this x in
+  let super, _ = supertype cx tparams_with_this x in
   let use_op = Op (ClassExtendsCheck {
     def = def_reason;
     name = reason;
@@ -685,7 +688,7 @@ let toplevels cx ~decls ~stmts ~expr ~private_property_map x =
     let static = Type.class_type this in
 
     let super, static_super =
-      let super_reason = replace_reason (fun d -> RSuperOf d) x.instance.reason in
+      let super_reason = update_desc_reason (fun d -> RSuperOf d) x.instance.reason in
       match x.super with
       | Interface _ -> failwith "tried to evaluate toplevel of interface"
       | Class {extends; _} ->
@@ -697,7 +700,7 @@ let toplevels cx ~decls ~stmts ~expr ~private_property_map x =
              expects a PolyT here. *)
           let c = if targs = None then specialize cx targs c else c in
           let t = Type.this_typeapp ~annot_loc c this targs in
-          t, Type.class_type t
+          t, Type.class_type ~annot_loc t
         | Implicit {null} ->
           let open Type in
           (if null then NullProtoT super_reason else ObjProtoT super_reason),

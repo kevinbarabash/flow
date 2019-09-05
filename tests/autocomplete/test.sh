@@ -69,6 +69,10 @@ printf "jsx2.js = "
 assert_ok \
   "$FLOW" autocomplete --strip-root --pretty jsx2.js 8 11 < jsx2.js
 
+printf "jsx3.js = "
+assert_ok \
+  "$FLOW" autocomplete --strip-root --pretty jsx3.js 10 4 < jsx3.js
+
 printf "customfun.js = "
 assert_ok \
   "$FLOW" autocomplete --strip-root --pretty customfun.js 6 1 < customfun.js
@@ -112,3 +116,35 @@ assert_ok \
 printf "object_literal.js:7:17 = "
 assert_ok \
   "$FLOW" autocomplete --strip-root --pretty object_literal.js 7 17 < object_literal.js
+
+printf "optional_object.js = "
+assert_ok \
+  "$FLOW" autocomplete --strip-root --pretty optional_object.js 3 5 < optional_object.js
+  
+printf "indirect_array.js:5:3 = "
+assert_ok \
+  "$FLOW" autocomplete --strip-root --pretty indirect_array.js 5 3 < indirect_array.js
+
+printf "indirect_array.js:10:3 = "
+assert_ok \
+  "$FLOW" autocomplete --strip-root --pretty indirect_array.js 10 3 < indirect_array.js
+
+printf "infer.js = "
+assert_ok \
+  "$FLOW" autocomplete --strip-root --pretty infer.js 4 5 < infer.js
+
+printf "eval_predicate.js = "
+assert_ok \
+  "$FLOW" autocomplete --strip-root --pretty eval_predicate.js 5 3 < eval_predicate.js
+
+printf "eval_destructor.js = "
+assert_ok \
+  "$FLOW" autocomplete --strip-root --pretty eval_destructor.js 5 3 < eval_destructor.js
+
+printf "poly.js = "
+assert_ok \
+  "$FLOW" autocomplete --strip-root --pretty poly.js 5 3 < poly.js
+
+printf "poly_no_args.js = "
+assert_ok \
+  "$FLOW" autocomplete --strip-root --pretty poly_no_args.js 5 3 < poly_no_args.js
