@@ -1302,6 +1302,7 @@ let reset_current_activation loc =
 let havoc_vars = Scope.(
   (* clear specific info for (topmost binding of) given var in env *)
   let havoc_entry (_, name, _) =
+    print_string("havoc_entry (Env.havoc_vars)");
     let rec loop = function
     | [] -> ()
     | scope :: scopes ->
@@ -1315,6 +1316,7 @@ let havoc_vars = Scope.(
   in
   (* clear refinement for (topmost binding of) given key in env *)
   let havoc_refi (_, key, _) =
+    print_string("havoc_refi (Env.havoc_vars)");
     let rec loop = function
     | [] -> ()
     | scope :: scopes ->
@@ -1353,6 +1355,7 @@ let havoc_heap_refinements_with_propname ~private_ name =
    into clearing the refinement we're in the process of installing.
  *)
 let add_heap_refinement op key refi_loc refined original =
+  print_string("add_heap_refinement");
   let refi = { refi_loc; refined; original } in
   let base, _ = key in
   let scope, _ = find_entry_in_var_scope base in
@@ -1453,3 +1456,6 @@ let in_refined_env cx loc preds orig_types f =
   update_env cx loc orig_env;
 
   result
+
+let fold_scopes f base =
+  List.fold_left f base !scopes

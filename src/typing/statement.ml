@@ -4266,15 +4266,25 @@ and new_call cx reason ~use_op class_ targs args =
   )
 
 and func_call_opt_use reason ~use_op ?(call_strict_arity=true) targts argts =
-  Env.havoc_heap_refinements ();
   let frame = Env.peek_frame () in
   let opt_app = mk_opt_functioncalltype reason targts argts frame call_strict_arity in
   OptCallT (use_op, reason, opt_app)
 
 and func_call cx reason ~use_op ?(call_strict_arity=true) func_t targts argts =
   let opt_use = func_call_opt_use reason ~use_op ~call_strict_arity targts argts in
-  Tvar.mk_where cx reason (fun t ->
-    Flow.flow cx (func_t, apply_opt_use opt_use t)
+  Tvar.mk_where cx reason (fun t -> 
+    let count = (Env.fold_scopes 
+      (fun count scope -> 
+        Scope.(count + (Key_map.fold (fun _ _ x -> x + 1) scope.refis 0))) 
+      0) in
+    (match count with
+      | 0 -> ()
+      | _ -> 
+        Flow.add_output cx (Error_message.EArithmeticOperand reason);
+        Env.havoc_heap_refinements ()
+    );
+    let out_t = apply_opt_use opt_use t in
+    Flow.flow cx (func_t, out_t)
   )
 
 (* returns (type of method itself, type returned from method) *)
